@@ -93,8 +93,8 @@ return {
 
     // read-only
     systemSettings: {
-        compiledMagic: 'xtsldiywhvgc',
-        selfieMagic: 'xtsldiywhvgc'
+        compiledMagic: 'nytangedtvcz',
+        selfieMagic: 'emzolxctioww'
     },
 
     restoreBackupSettings: {
@@ -187,7 +187,8 @@ return {
         "assets/thirdparties/www.void.gr/kargig/void-gr-filters.txt": "https://www.void.gr/kargig/void-gr-filters.txt",
         "assets/thirdparties/www.zoso.ro/pages/rolist.txt": "",
         "https://iadb.azurewebsites.net/Finland_adb.txt": "http://adb.juvander.net/Finland_adb.txt",
-        "https://www.certyficate.it/adblock/adblock.txt": "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/polish-adblock-filters/adblock.txt"
+        "https://www.certyficate.it/adblock/adblock.txt": "https://raw.githubusercontent.com/MajkiIT/polish-ads-filter/master/polish-adblock-filters/adblock.txt",
+        "https://raw.githubusercontent.com/heradhis/indonesianadblockrules/master/subscriptions/abpindo.txt": "https://raw.githubusercontent.com/ABPindo/indonesianadblockrules/master/subscriptions/abpindo.txt"
     },
 
     selfieAfter: 23 * oneMinute,

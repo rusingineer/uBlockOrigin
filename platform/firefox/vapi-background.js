@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-    µBlock - a browser extension to block requests.
-    Copyright (C) 2014 The µBlock authors
+    uBlock Origin - a browser extension to block requests.
+    Copyright (C) 2014-2106 The uBlock Origin authors
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@
 */
 
 /* jshint esnext: true, bitwise: false */
-/* global self, Components, punycode, µBlock */
+/* global punycode */
 
 // For background page
 
@@ -62,7 +62,7 @@ var deferUntil = function(testFn, mainFn, details) {
         vAPI.setTimeout(check, next);
     };
 
-    if ( details.async === false ) {
+    if ( 'sync' in details && details.sync === true ) {
         check();
     } else {
         vAPI.setTimeout(check, 1);
@@ -410,6 +410,7 @@ vAPI.storage = (function() {
                 if ( typeof callback === 'function' && reason === 0 ) {
                     callback(result);
                 }
+                result = null;
             },
             handleError: function(error) {
                 console.error('SQLite error ', error.result, error.message);
@@ -417,6 +418,7 @@ vAPI.storage = (function() {
                 if ( typeof callback === 'function' ) {
                     callback(null);
                 }
+                result = null;
             }
         });
     };
@@ -829,7 +831,7 @@ vAPI.tabs.get = function(tabId, callback) {
         id: tabId,
         index: tabWatcher.indexFromTarget(browser),
         windowId: winWatcher.idFromWindow(win),
-        active: browser === tabBrowser.selectedBrowser,
+        active: tabBrowser !== null && browser === tabBrowser.selectedBrowser,
         url: browser.currentURI.asciiSpec,
         title: browser.contentTitle
     });
@@ -921,6 +923,9 @@ vAPI.tabs.open = function(details) {
 
     var win = winWatcher.getCurrentWindow();
     var tabBrowser = getTabBrowser(win);
+    if ( tabBrowser === null ) {
+        return;
+    }
 
     if ( vAPI.fennec ) {
         tabBrowser.addTab(details.url, {
@@ -1428,7 +1433,11 @@ vAPI.setIcon = function(tabId, iconStatus, badge) {
     var win = badge === undefined
         ? iconStatus
         : winWatcher.getCurrentWindow();
-    var curTabId = tabWatcher.tabIdFromTarget(getTabBrowser(win).selectedTab);
+    var curTabId;
+    var tabBrowser = getTabBrowser(win);
+    if ( tabBrowser !== null ) {
+        curTabId = tabWatcher.tabIdFromTarget(tabBrowser.selectedTab);
+    }
     var tb = vAPI.toolbarButton;
 
     // from 'TabSelect' event
@@ -1438,7 +1447,7 @@ vAPI.setIcon = function(tabId, iconStatus, badge) {
         tb.tabs[tabId] = { badge: badge, img: iconStatus === 'on' };
     }
 
-    if ( tabId === curTabId ) {
+    if ( curTabId && tabId === curTabId ) {
         tb.updateState(win, tabId);
         vAPI.contextMenu.onMustUpdate(tabId);
     }
@@ -1961,16 +1970,20 @@ var httpObserver = {
     // Also:
     //   https://developer.mozilla.org/en-US/Firefox/Multiprocess_Firefox/Limitations_of_chrome_scripts
     tabIdFromChannel: function(channel) {
-        var ncbs = channel.notificationCallbacks;
-        if ( !ncbs && channel.loadGroup ) {
-            ncbs = channel.loadGroup.notificationCallbacks;
-        }
-        if ( !ncbs ) { return vAPI.noTabId; }
         var lc;
         try {
-            lc = ncbs.getInterface(Ci.nsILoadContext);
-        } catch (ex) { }
-        if ( !lc ) { return vAPI.noTabId; }
+            lc = channel.notificationCallbacks.getInterface(Ci.nsILoadContext);
+        } catch(ex) {
+        }
+        if ( !lc ) {
+            try {
+                lc = channel.loadGroup.notificationCallbacks.getInterface(Ci.nsILoadContext);
+            } catch(ex) {
+            }
+            if ( !lc ) {
+                return vAPI.noTabId;
+            }
+        }
         if ( lc.topFrameElement ) {
             return tabWatcher.tabIdFromTarget(lc.topFrameElement);
         }
@@ -1978,7 +1991,9 @@ var httpObserver = {
         try {
             win = lc.associatedWindow;
         } catch (ex) { }
-        if ( !win ) { return vAPI.noTabId; }
+        if ( !win ) {
+            return vAPI.noTabId;
+        }
         if ( win.top ) {
             win = win.top;
         }
@@ -1990,7 +2005,9 @@ var httpObserver = {
                    .QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow)
             );
         } catch (ex) { }
-        if ( !tabBrowser ) { return vAPI.noTabId; }
+        if ( !tabBrowser ) {
+            return vAPI.noTabId;
+        }
         if ( tabBrowser.getBrowserForContentWindow ) {
             return tabWatcher.tabIdFromTarget(tabBrowser.getBrowserForContentWindow(win));
         }
@@ -2034,12 +2051,12 @@ var httpObserver = {
             return false;
         }
 
-        if ( result.cancel === true ) {
+        if ( 'cancel' in result && result.cancel === true ) {
             channel.cancel(this.ABORT);
             return true;
         }
 
-        if ( result.redirectUrl ) {
+        if ( 'redirectUrl' in result ) {
             channel.redirectionLimit = 1;
             channel.redirectTo(Services.io.newURI(result.redirectUrl, null, null));
             return true;
@@ -2622,7 +2639,7 @@ vAPI.toolbarButton = {
 
 /******************************************************************************/
 
-// Firefox 28 and less
+// Firefox 35 and less: use legacy toolbar button.
 
 (function() {
     var tbb = vAPI.toolbarButton;
@@ -2637,7 +2654,10 @@ vAPI.toolbarButton = {
         } catch (ex) {
         }
     }
-    if ( CustomizableUI !== null ) {
+    if (
+        CustomizableUI !== null &&
+        Services.vc.compare(Services.appinfo.platformVersion, '36.0') >= 0
+    ) {
         return;
     }
 
@@ -2706,8 +2726,11 @@ vAPI.toolbarButton = {
             palette.appendChild(toolbarButton);
         }
 
-        // Find the place to put the button
-        var toolbars = toolbox.externalToolbars.slice();
+        // Find the place to put the button.
+        // Pale Moon: `toolbox.externalToolbars` can be undefined. Seen while
+        //   testing popup test number 3:
+        //   http://raymondhill.net/ublock/popup.html
+        var toolbars = toolbox.externalToolbars ? toolbox.externalToolbars.slice() : [];
         for ( var child of toolbox.children ) {
             if ( child.localName === 'toolbar' ) {
                 toolbars.push(child);
@@ -2722,6 +2745,11 @@ vAPI.toolbarButton = {
             var currentset = currentsetString.split(/\s*,\s*/);
             var index = currentset.indexOf(tbb.id);
             if ( index === -1 ) {
+                continue;
+            }
+            // This can occur with Pale Moon:
+            //   "TypeError: toolbar.insertItem is not a function"
+            if ( typeof toolbar.insertItem !== 'function' ) {
                 continue;
             }
             // Found our button on this toolbar - but where on it?
@@ -2825,137 +2853,6 @@ vAPI.toolbarButton = {
             location.host + ':closePopup',
             onPopupCloseRequested
         );
-
-        cleanupTasks.push(shutdown);
-    };
-})();
-
-/******************************************************************************/
-
-// Firefox Australis < 36.
-
-(function() {
-    var tbb = vAPI.toolbarButton;
-    if ( tbb.init !== null ) {
-        return;
-    }
-    if ( Services.vc.compare(Services.appinfo.platformVersion, '36.0') >= 0 ) {
-        return null;
-    }
-    if ( vAPI.localStorage.getBool('forceLegacyToolbarButton') ) {
-        return null;
-    }
-    var CustomizableUI = null;
-    try {
-        CustomizableUI = Cu.import('resource:///modules/CustomizableUI.jsm', null).CustomizableUI;
-    } catch (ex) {
-    }
-    if ( CustomizableUI === null ) {
-        return;
-    }
-    tbb.codePath = 'australis';
-    tbb.CustomizableUI = CustomizableUI;
-    tbb.defaultArea = CustomizableUI.AREA_NAVBAR;
-
-    var styleURI = null;
-
-    var onPopupCloseRequested = function({target}) {
-        if ( typeof tbb.closePopup === 'function' ) {
-            tbb.closePopup(target);
-        }
-    };
-
-    var shutdown = function() {
-        CustomizableUI.destroyWidget(tbb.id);
-
-        for ( var win of winWatcher.getWindows() ) {
-            var panel = win.document.getElementById(tbb.viewId);
-            panel.parentNode.removeChild(panel);
-            win.QueryInterface(Ci.nsIInterfaceRequestor)
-               .getInterface(Ci.nsIDOMWindowUtils)
-               .removeSheet(styleURI, 1);
-        }
-
-        vAPI.messaging.globalMessageManager.removeMessageListener(
-            location.host + ':closePopup',
-            onPopupCloseRequested
-        );
-    };
-
-    tbb.onBeforeCreated = function(doc) {
-        var panel = doc.createElement('panelview');
-
-        this.populatePanel(doc, panel);
-
-        doc.getElementById('PanelUI-multiView').appendChild(panel);
-
-        doc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
-            .getInterface(Ci.nsIDOMWindowUtils)
-            .loadSheet(styleURI, 1);
-    };
-
-    tbb.onBeforePopupReady = function() {
-        // https://github.com/gorhill/uBlock/issues/83
-        // Add `portrait` class if width is constrained.
-        try {
-            this.contentDocument.body.classList.toggle(
-                'portrait',
-                CustomizableUI.getWidget(tbb.id).areaType === CustomizableUI.TYPE_MENU_PANEL
-            );
-        } catch (ex) {
-            /* noop */
-        }
-    };
-
-    tbb.init = function() {
-        vAPI.messaging.globalMessageManager.addMessageListener(
-            location.host + ':closePopup',
-            onPopupCloseRequested
-        );
-
-        var style = [
-            '#' + this.id + '.off {',
-                'list-style-image: url(',
-                    vAPI.getURL('img/browsericons/icon16-off.svg'),
-                ');',
-            '}',
-            '#' + this.id + ' {',
-                'list-style-image: url(',
-                    vAPI.getURL('img/browsericons/icon16.svg'),
-                ');',
-            '}',
-            '#' + this.viewId + ',',
-            '#' + this.viewId + ' > iframe {',
-                'width: 160px;',
-                'height: 290px;',
-                'overflow: hidden !important;',
-            '}',
-            '#' + this.id + '[badge]:not([badge=""])::after {',
-                'position: absolute;',
-                'margin-left: -16px;',
-                'margin-top: 3px;',
-                'padding: 1px 2px;',
-                'font-size: 9px;',
-                'font-weight: bold;',
-                'color: #fff;',
-                'background: #666;',
-                'content: attr(badge);',
-            '}'
-        ];
-
-        styleURI = Services.io.newURI(
-            'data:text/css,' + encodeURIComponent(style.join('')),
-            null,
-            null
-        );
-
-        this.closePopup = function(tabBrowser) {
-            CustomizableUI.hidePanelForNode(
-                tabBrowser.ownerDocument.getElementById(this.viewId)
-            );
-        };
-
-        CustomizableUI.createWidget(this);
 
         cleanupTasks.push(shutdown);
     };
@@ -3483,16 +3380,21 @@ vAPI.lastError = function() {
 // the web pages before uBlock was ready.
 
 vAPI.onLoadAllCompleted = function() {
+    // TODO: vAPI shouldn't know about uBlock. Just like in uMatrix, uBlock
+    // should collect on its side all the opened tabs whenever it is ready.
     var µb = µBlock;
     var tabId;
     for ( var browser of tabWatcher.browsers() ) {
         tabId = tabWatcher.tabIdFromTarget(browser);
         µb.tabContextManager.commit(tabId, browser.currentURI.asciiSpec);
         µb.bindTabToPageStats(tabId);
-        browser.messageManager.sendAsyncMessage(
-            location.host + '-load-completed'
-        );
     }
+    // Inject special frame script, which sole purpose is to inject
+    // content scripts into *already* opened tabs. This allows to unclutter
+    // the main frame script.
+    vAPI.messaging
+        .globalMessageManager
+        .loadFrameScript(vAPI.getURL('frameScript0.js'), false);
 };
 
 /******************************************************************************/

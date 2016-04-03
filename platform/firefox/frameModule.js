@@ -33,7 +33,8 @@ const {XPCOMUtils} = Cu.import('resource://gre/modules/XPCOMUtils.jsm', null);
 const hostName = Services.io.newURI(Components.stack.filename, null, null).host;
 const rpcEmitterName = hostName + ':child-process-message';
 
-//Cu.import('resource://devtools/Console.jsm');
+//Cu.import('resource://gre/modules/Console.jsm'); // Firefox >= 44
+//Cu.import('resource://gre/modules/devtools/Console.jsm'); // Firefox < 44
 
 /******************************************************************************/
 
@@ -154,7 +155,7 @@ var contentObserver = {
             .outerWindowID;
     },
 
-    handlePopup: function(location, context) {
+    handlePopup: function(location, origin, context) {
         let openeeContext = context.contentWindow || context;
         if (
             typeof openeeContext.opener !== 'object' ||
@@ -168,10 +169,20 @@ var contentObserver = {
         // Use location of top window, not that of a frame, as this
         // would cause tab id lookup (necessary for popup blocking) to
         // always fail.
-        let openerURL = openeeContext.opener.top &&
-                        openeeContext.opener.top.location.href;
+        // https://github.com/gorhill/uBlock/issues/1305
+        //   Opener could be a dead object, using it would cause a throw.
+        //   Repro case:
+        //   - Open http://delishows.to/show/chicago-med/season/1/episode/6
+        //   - Click anywhere in the background
+        let openerURL = null;
+        try {
+            let opener = openeeContext.opener.top || openeeContext.opener;
+            openerURL = opener.location && opener.location.href;
+        } catch(ex) {
+        }
+        // If no valid opener URL found, use the origin URL.
         if ( openerURL === null ) {
-            return;
+            openerURL = origin.asciiSpec;
         }
         let messageManager = getMessageManager(openeeContext);
         if ( messageManager === null ) {
@@ -204,7 +215,7 @@ var contentObserver = {
         }
 
         if ( type === this.MAIN_FRAME ) {
-            this.handlePopup(location, context);
+            this.handlePopup(location, origin, context);
         }
 
         if ( !location.schemeIs('http') && !location.schemeIs('https') ) {
@@ -460,29 +471,17 @@ var contentObserver = {
 
 /******************************************************************************/
 
-const locationChangedMessageName = hostName + ':locationChanged';
-
-var LocationChangeListener = function(docShell) {
-    if ( !docShell ) {
+var LocationChangeListener = function(docShell, webProgress) {
+    var mm = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                     .getInterface(Ci.nsIContentFrameMessageManager);
+    if ( !mm || typeof mm.sendAsyncMessage !== 'function' ) {
         return;
     }
-
-    var requestor = docShell.QueryInterface(Ci.nsIInterfaceRequestor);
-    var ds = requestor.getInterface(Ci.nsIWebProgress);
-    if ( !ds ) {
-        return;
-    }
-    var mm = requestor.getInterface(Ci.nsIContentFrameMessageManager);
-    if ( !mm ) {
-        return;
-    }
-    if ( typeof mm.sendAsyncMessage !== 'function' ) {
-        return;
-    }
-    this.docShell = ds;
     this.messageManager = mm;
-    ds.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_LOCATION);
+    webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_LOCATION);
 };
+
+LocationChangeListener.prototype.messageName = hostName + ':locationChanged';
 
 LocationChangeListener.prototype.QueryInterface = XPCOMUtils.generateQI([
     'nsIWebProgressListener',
@@ -493,7 +492,7 @@ LocationChangeListener.prototype.onLocationChange = function(webProgress, reques
     if ( !webProgress.isTopLevel ) {
         return;
     }
-    this.messageManager.sendAsyncMessage(locationChangedMessageName, {
+    this.messageManager.sendAsyncMessage(this.messageName, {
         url: location.asciiSpec,
         flags: flags
     });

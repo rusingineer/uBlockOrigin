@@ -2,6 +2,8 @@
 
 **The issue tracker is for provable issues only:** You will have to make the case that the issue is really with uBlock Origin and not something else on your side. To make a case means to provide detailed steps so that anybody can reproduce the issue. Be sure to rule out that the issue is not caused by something specific on your side.
 
+For **support/discussions**, there is [Mozilla Discourse](https://discourse.mozilla-community.org/t/support-ublock-origin/6746).
+
 **Any issue opened without effort to provide the required details for me (or anybody else) to reproduce the problem will be closed as _invalid_.** If you provide more details thereafter for me to reproduce the issue, I will reopen it if I can confirm there is indeed an issue with uBlock Origin. Example of detailed steps:
 
 > 1. browser version/ublock version
@@ -33,8 +35,9 @@ The most important part when opening an issue: **detailed steps**.
     - Submit feature requests.
     - Submit "revolutionary ideas".
     - Post comments like "+1" or "me too!" without providing new relevant info on the issue.
-    - Use issues as replacement for threads on a bulletin board. [You can use Reddit](https://www.reddit.com/r/ublock+ublockorigin) for general discussion among users.
+    - Use issues as replacement for threads on a bulletin board.
     - Any such issue will be closed without comment.
+    - Ask me to publish the latest version to AMO/Chrome store: In all likelihood it is already published, but pending review, something which is out of my control.
 1. Make sure your issue [hasn't already been fixed in a recent release](https://github.com/gorhill/uBlock/releases).
 1. Verify that the issue does **not** occur with uBlock disabled.
 1. **Verify that the issue is not related to a 3rd-party filter lists.**
@@ -50,7 +53,7 @@ The most important part when opening an issue: **detailed steps**.
 To help diagnose and fix the bug/issue, please always include the following in your report:
 
 * A clear list of steps to reproduce the problem
-  * **Always include a URL**, _even_ if "it happens everywhere".
+  * **ALWAYS INCLUDE A SPECIFIC URL WHERE THE ISSUE OCCURS**, _even_ if "it happens everywhere".
 * Symptoms of the issue
   * Describe what you observe and consider broken behavior; this is what we'll be looking for after executing the steps
   * Example: video doesn't start playing, page layout broken

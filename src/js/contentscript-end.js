@@ -1,7 +1,7 @@
 /*******************************************************************************
 
-    µBlock - a browser extension to block requests.
-    Copyright (C) 2014 Raymond Hill
+    uBlock Origin - a browser extension to block requests.
+    Copyright (C) 2014-2016 Raymond Hill
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -56,15 +56,6 @@ vAPI.contentscriptEndInjected = true;
 vAPI.styles = vAPI.styles || [];
 
 /******************************************************************************/
-
-var messager = vAPI.messaging.channel('contentscript-end.js');
-
-// https://github.com/gorhill/uMatrix/issues/144
-vAPI.shutdown.add(function() {
-    messager.close();
-});
-
-/******************************************************************************/
 /******************************************************************************/
 
 // https://github.com/chrisaljoudi/uBlock/issues/7
@@ -73,17 +64,17 @@ var uBlockCollapser = (function() {
     var timer = null;
     var requestId = 1;
     var newRequests = [];
-    var pendingRequests = {};
+    var pendingRequests = Object.create(null);
     var pendingRequestCount = 0;
     var src1stProps = {
         'embed': 'src',
-        'iframe': 'src',
         'img': 'src',
         'object': 'data'
     };
     var src2ndProps = {
         'img': 'srcset'
     };
+    var messaging = vAPI.messaging;
 
     var PendingRequest = function(target, tagName, attr) {
         this.id = requestId++;
@@ -104,6 +95,10 @@ var uBlockCollapser = (function() {
     };
 
     var onProcessed = function(response) {
+        // This can happens if uBO is restarted.
+        if ( !response ) {
+            return;
+        }
         // https://github.com/gorhill/uMatrix/issues/144
         if ( response.shutdown ) {
             vAPI.shutdown.exec();
@@ -119,10 +114,10 @@ var uBlockCollapser = (function() {
         var request, entry, target, value;
         while ( i-- ) {
             request = requests[i];
-            if ( pendingRequests.hasOwnProperty(request.id) === false ) {
+            entry = pendingRequests[request.id];
+            if ( entry === undefined ) {
                 continue;
             }
-            entry = pendingRequests[request.id];
             delete pendingRequests[request.id];
             pendingRequestCount -= 1;
 
@@ -144,28 +139,34 @@ var uBlockCollapser = (function() {
             }
         }
         if ( selectors.length !== 0 ) {
-            messager.send({
-                what: 'cosmeticFiltersInjected',
-                type: 'net',
-                hostname: window.location.hostname,
-                selectors: selectors
-            });
+            messaging.send(
+                'contentscript',
+                {
+                    what: 'cosmeticFiltersInjected',
+                    type: 'net',
+                    hostname: window.location.hostname,
+                    selectors: selectors
+                }
+            );
         }
         // Renew map: I believe that even if all properties are deleted, an
         // object will still use more memory than a brand new one.
         if ( pendingRequestCount === 0 ) {
-            pendingRequests = {};
+            pendingRequests = Object.create(null);
         }
     };
 
     var send = function() {
         timer = null;
-        messager.send({
-            what: 'filterRequests',
-            pageURL: window.location.href,
-            pageHostname: window.location.hostname,
-            requests: newRequests
-        }, onProcessed);
+        messaging.send(
+            'contentscript',
+            {
+                what: 'filterRequests',
+                pageURL: window.location.href,
+                pageHostname: window.location.hostname,
+                requests: newRequests
+            }, onProcessed
+        );
         newRequests = [];
     };
 
@@ -210,6 +211,13 @@ var uBlockCollapser = (function() {
         newRequests.push(new BouncingRequest(req.id, tagName, src));
     };
 
+    var addMany = function(targets) {
+        var i = targets.length;
+        while ( i-- ) {
+            add(targets[i]);
+        }
+    };
+
     var iframeSourceModified = function(mutations) {
         var i = mutations.length;
         while ( i-- ) {
@@ -225,6 +233,10 @@ var uBlockCollapser = (function() {
 
     var primeLocalIFrame = function(iframe) {
         // Should probably also copy injected styles.
+        // The injected scripts are those which were injected in the current
+        // document, from within the `contentscript-start.js / injectScripts`,
+        // and which scripts are selectively looked-up from:
+        // https://github.com/gorhill/uBlock/blob/master/assets/ublock/resources.txt
         if ( vAPI.injectedScripts ) {
             var scriptTag = document.createElement('script');
             scriptTag.appendChild(document.createTextNode(vAPI.injectedScripts));
@@ -254,21 +266,26 @@ var uBlockCollapser = (function() {
         newRequests.push(new BouncingRequest(req.id, 'iframe', src));
     };
 
-    var iframesFromNode = function(node) {
-        if ( node.localName === 'iframe' ) {
-            addIFrame(node);
-        }
-        var iframes = node.getElementsByTagName('iframe');
+    var addIFrames = function(iframes) {
         var i = iframes.length;
         while ( i-- ) {
             addIFrame(iframes[i]);
         }
+    };
+
+    var iframesFromNode = function(node) {
+        if ( node.localName === 'iframe' ) {
+            addIFrame(node);
+        }
+        addIFrames(node.getElementsByTagName('iframe'));
         process();
     };
 
     return {
         add: add,
+        addMany: addMany,
         addIFrame: addIFrame,
+        addIFrames: addIFrames,
         iframesFromNode: iframesFromNode,
         process: process
     };
@@ -385,6 +402,7 @@ var uBlockCollapser = (function() {
     };
     checkStyleTags();
 
+    var messaging = vAPI.messaging;
     var queriedSelectors = {};
     var injectedSelectors = {};
     var lowGenericSelectors = [];
@@ -395,7 +413,9 @@ var uBlockCollapser = (function() {
     var retrieveGenericSelectors = function() {
         if ( lowGenericSelectors.length !== 0 || highGenerics === null ) {
             //console.log('µBlock> ABP cosmetic filters: retrieving CSS rules using %d selectors', lowGenericSelectors.length);
-            messager.send({
+            messaging.send(
+                'contentscript',
+                {
                     what: 'retrieveGenericCosmeticSelectors',
                     pageURL: window.location.href,
                     selectors: lowGenericSelectors,
@@ -507,12 +527,15 @@ var uBlockCollapser = (function() {
             vAPI.styles.push(style);
         }
         hideElements(styleText);
-        messager.send({
-            what: 'cosmeticFiltersInjected',
-            type: 'cosmetic',
-            hostname: window.location.hostname,
-            selectors: selectors
-        });
+        messaging.send(
+            'contentscript',
+            {
+                what: 'cosmeticFiltersInjected',
+                type: 'cosmetic',
+                hostname: window.location.hostname,
+                selectors: selectors
+            }
+        );
         //console.debug('µBlock> generic cosmetic filters: injecting %d CSS rules:', selectors.length, text);
     };
 
@@ -835,7 +858,7 @@ var uBlockCollapser = (function() {
             idsFromNodeList(selectNodes('[id]'));
             classesFromNodeList(selectNodes('[class]'));
             retrieveGenericSelectors();
-            messager.send({ what: 'cosmeticFiltersActivated' });
+            messaging.send('contentscript', { what: 'cosmeticFiltersActivated' });
         }
     };
 
@@ -888,6 +911,12 @@ var uBlockCollapser = (function() {
         if ( addedNodeListsTimer !== null ) {
             clearTimeout(addedNodeListsTimer);
         }
+        if ( removedNodeListsTimer !== null ) {
+            clearTimeout(removedNodeListsTimer);
+        }
+        if ( processHighHighGenericsTimer !== null ) {
+            clearTimeout(processHighHighGenericsTimer);
+        }
     });
 })();
 
@@ -925,35 +954,17 @@ var uBlockCollapser = (function() {
 
 (function() {
     var collapser = uBlockCollapser;
-    var elems, i, elem;
-
-    elems = document.getElementsByTagName('embed');
-    i = elems.length;
-    while ( i-- ) {
-        collapser.add(elems[i]);
-    }
-
-    elems = document.getElementsByTagName('object');
-    i = elems.length;
-    while ( i-- ) {
-        collapser.add(elems[i]);
-    }
-
-    elems = document.getElementsByTagName('img');
-    i = elems.length;
+    var elems = document.getElementsByTagName('img'),
+        i = elems.length, elem;
     while ( i-- ) {
         elem = elems[i];
         if ( elem.complete ) {
             collapser.add(elem);
         }
     }
-
-    elems = document.getElementsByTagName('iframe');
-    i = elems.length;
-    while ( i-- ) {
-        collapser.addIFrame(elems[i]);
-    }
-
+    collapser.addMany(document.getElementsByTagName('embed'));
+    collapser.addMany(document.getElementsByTagName('object'));
+    collapser.addIFrames(document.getElementsByTagName('iframe'));
     collapser.process(0);
 })();
 
@@ -973,20 +984,25 @@ var uBlockCollapser = (function() {
     if ( window !== window.top ) {
         return;
     }
+
+    var messaging = vAPI.messaging;
+
     var onMouseClick = function(ev) {
         var elem = ev.target;
         while ( elem !== null && elem.localName !== 'a' ) {
             elem = elem.parentElement;
         }
-        messager.send({
-            what: 'mouseClick',
-            x: ev.clientX,
-            y: ev.clientY,
-            url: elem !== null ? elem.href : ''
-        });
+        messaging.send(
+            'contentscript',
+            {
+                what: 'mouseClick',
+                x: ev.clientX,
+                y: ev.clientY,
+                url: elem !== null ? elem.href : ''
+            });
     };
 
-    window.addEventListener('mousedown', onMouseClick, true);
+    document.addEventListener('mousedown', onMouseClick, true);
 
     // https://github.com/gorhill/uMatrix/issues/144
     vAPI.shutdown.add(function() {
